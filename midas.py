@@ -34,10 +34,10 @@ args = vars(parser.parse_args())
 # Logging Configuration 
 logsfile = config.get('settings','logs')
 logging.basicConfig(filename=logsfile, level=logging.WARNING)
-logging.info('Starting MIDAS with the following options: ' + str(args))
+logging.info(f'Starting MIDAS with the following options: {args}')
 
 # Import PyDeep and Yara if needed
-if config.get('settings','ssdeep') == 'True': import pydeep 
+if config.get('settings','ssdeep') == 'True': import pydeep
 if config.get('settings','fullyara') == 'True': import yara
 
 #keys to nuke from exiftool pulls and other globals
@@ -81,33 +81,32 @@ def sigfiles(filename):
 badmetalist = sigfiles(config.get('settings','badmetalist'))
 
 def md5sum(filename):
-    fh = open(filename, 'rb')
-    m = hashlib.md5()
-    while True:
-        data = fh.read(8192)
-        if not data:
-            break
-        m.update(data)
-    return m.hexdigest()
+	fh = open(filename, 'rb')
+	m = hashlib.md5()
+	while True:
+		if data := fh.read(8192):
+			m.update(data)
+		else:
+			break
+	return m.hexdigest()
 
 def buildFilelist(directory):
-	filelist = [] 
+	filelist = []
 	for root, dirs, files in os.walk(pathtofiles):
-		for name in files: 
-			filelist.append(os.path.join(root, name))
+		filelist.extend(os.path.join(root, name) for name in files)
 	return filelist
 
 def metadataCheck(filename, md5):
 	with exiftool.ExifTool() as et:
 		metadata = et.get_metadata(filename)
 	for key in uselessexifkey:
-		del metadata[key]	
-	hits = []	
+		del metadata[key]
+	hits = []
 	for key, value in metadata.iteritems():
 		for sig in badmetalist:
 			if sig == value:
-				logging.critical(timestamp() + ": Bad Metadata Alert: " + key + ":" + value + " MD5:"+ md5)
-				hits.append("Bad_Meta:" + key +  value)
+				logging.critical(f"{timestamp()}: Bad Metadata Alert: {key}:{value} MD5:{md5}")
+				hits.append(f"Bad_Meta:{key}{value}")
 	if hits:
 		metadata[u'Metadata_Alerts'] = str(hits).replace("u'", "").replace("'",'')
 	else: 
@@ -120,13 +119,11 @@ def timestamp():
 
 
 def yaraScan(filename, md5):
-	if os.stat(filename).st_size > 0: #check to ensure no zero byte files are scanned 
-		matches = rules.match(filename)
-		if matches:
-			logging.critical(timestamp() + ": Yara Alert: " + str(matches) + " MD5: " + md5)
-			return matches
-		else:
-			return 'None'
+	if os.stat(filename).st_size <= 0:
+		return 'None'
+	if matches := rules.match(filename):
+		logging.critical(f"{timestamp()}: Yara Alert: {str(matches)} MD5: {md5}")
+		return matches
 	else:
 		return 'None'
 
@@ -137,17 +134,26 @@ def inspectFile(filename):
 	metadata[u'_id'] = md5
 	metadata[u'File:DateTimeRecieved'] = timestamp()
 	if config.get('settings','fullyara') == 'True': metadata[u'YaraAlerts'] = str(yaraScan(filename, md5))
-	if config.get('settings','virustotal') == 'True': metadata[u'VirusTotal'] = vtapi(metadata[u'md5']) 
+	if config.get('settings','virustotal') == 'True': metadata[u'VirusTotal'] = vtapi(metadata[u'md5'])
 	if config.get('settings','virustotal') != 'True': metadata[u'VirusTotal'] = 'VirusTotal API Not Enabled'
 	if config.get('settings','ssdeep') == 'True': metadata[u'SSDeep'] = ssdeep(filename)
 	if config.get('settings','maliciousonly') == 'False':
 		metadatacollection.update({'_id': md5}, metadata, upsert=True)
-		logging.info(timestamp() + ": Metadata for " + os.path.basename(filename) + " MD5: " +md5 + " added to database")
+		logging.info(
+			f"{timestamp()}: Metadata for {os.path.basename(filename)} MD5: {md5} added to database"
+		)
+
 	elif config.get('settings','maliciousonly') == 'True':
-		if metadata[u'YaraAlerts'] != 'None' or metadata[u'Metadata_Alerts'] != 'None' or metadata[u'VirusTotal'][0].isdigit() == True:
-			if not metadata[u'VirusTotal'].startswith('0'):
-				metadatacollection.update({'_id': md5}, metadata, upsert=True)
-				logging.info(timestamp() + ": Metadata for " + os.path.basename(filename) + " MD5: " +md5 + " added to database")
+		if (
+			metadata[u'YaraAlerts'] != 'None'
+			or metadata[u'Metadata_Alerts'] != 'None'
+			or metadata[u'VirusTotal'][0].isdigit() == True
+		) and not metadata[u'VirusTotal'].startswith('0'):
+			metadatacollection.update({'_id': md5}, metadata, upsert=True)
+			logging.info(
+				f"{timestamp()}: Metadata for {os.path.basename(filename)} MD5: {md5} added to database"
+			)
+
 	if args['move']: moveFiles(args['move'], filename, os.path.basename(filename))
 	if args['delete'] == True: deleteFiles(filename) 
 
@@ -158,11 +164,11 @@ def moveFiles(movepath, filename, name):
 	if not os.path.exists(movepath):
 		os.makedirs(movepath)
 	shutil.move(filename, movepath + name)
-	logging.info(timestamp() + ":" + filename + " has been moved to " + movepath + name)
+	logging.info(f"{timestamp()}:{filename} has been moved to {movepath}{name}")
 
 def deleteFiles(filename):
 	os.remove(filename)
-	logging.info(timestamp() + ":" + filename + " has been deleted.")
+	logging.info(f"{timestamp()}:{filename} has been deleted.")
 
 def vtapi(md5):
 	url = "https://www.virustotal.com/vtapi/v2/file/report"
@@ -173,11 +179,11 @@ def vtapi(md5):
 	try:
 		VTjson = json.loads(response.read())
 		#print VTjson
-		if VTjson['response_code'] == 1 :
+		if VTjson['response_code'] == 1:
 			vthitstat = str(VTjson['positives']) + '/' + str(VTjson['total']) + ' Detections on ' + str(VTjson['scan_date'])
-			logging.critical(timestamp() + ": VirusTotal Alert: " + vthitstat + " MD5: " + md5)	
-			return vthitstat		
-		else :
+			logging.critical(f"{timestamp()}: VirusTotal Alert: {vthitstat} MD5: {md5}")
+			return vthitstat
+		else:
 			return "File Does Not Exist in VirusTotal"
 	except Exception:
 		return "VirusTotal API Error"
